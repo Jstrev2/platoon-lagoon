@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Platoon Lagoon 🏝️⚾</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏝️</text></svg>">
+    <link href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header id="header">
+            <div class="header-content">
+                <h1 class="logo" onclick="showGames()">
+                    <span class="logo-icon">🏝️</span>
+                    <span class="logo-text">The Platoon Lagoon</span>
+                </h1>
+                <p class="tagline">Pick the platoon players who'll crack the lineup</p>
+            </div>
+            <div class="date-nav">
+                <button class="date-btn" onclick="changeDate(-1)">◀</button>
+                <span id="current-date" class="date-display"></span>
+                <button class="date-btn" onclick="changeDate(1)">▶</button>
+            </div>
+        </header>
+
+        <!-- Loading -->
+        <div id="loading" class="loading">
+            <div class="palm-tree">🌴</div>
+            <p>Checking the tides...</p>
+        </div>
+
+        <!-- Games List -->
+        <div id="games-view" class="view" style="display:none;">
+            <div id="games-grid" class="games-grid"></div>
+            <div id="no-games" class="no-games" style="display:none;">
+                <span class="big-emoji">🥥</span>
+                <p>No games today. Relax by the lagoon.</p>
+            </div>
+        </div>
+
+        <!-- Game Detail / Platoon Picker -->
+        <div id="game-view" class="view" style="display:none;">
+            <button class="back-btn" onclick="showGames()">← Back to Games</button>
+            <div id="game-header" class="game-header"></div>
+            <div id="matchup-info" class="matchup-info"></div>
+            <div class="teams-container">
+                <div class="team-panel" id="away-panel">
+                    <div class="team-panel-header" id="away-header"></div>
+                    <div class="roster-list" id="away-roster"></div>
+                </div>
+                <div class="team-panel" id="home-panel">
+                    <div class="team-panel-header" id="home-header"></div>
+                    <div class="roster-list" id="home-roster"></div>
+                </div>
+            </div>
+            <div id="submit-area" class="submit-area" style="display:none;">
+                <button class="submit-btn" onclick="submitPicks()">🏝️ Lock In My Picks</button>
+                <p class="pick-count" id="pick-count"></p>
+            </div>
+            <div id="results-area" class="results-area" style="display:none;"></div>
+        </div>
+
+        <!-- Leaderboard -->
+        <div id="leaderboard-view" class="view" style="display:none;">
+            <h2 class="section-title">🏆 Lagoon Legends</h2>
+            <div id="leaderboard-content"></div>
+        </div>
+    </div>
+
+    <footer>
+        <p>The Platoon Lagoon — Where lineup hunches meet tropical punches 🍹</p>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>
