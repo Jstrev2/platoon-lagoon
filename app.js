@@ -95,7 +95,7 @@ function renderGames(games) {
     }).join('');
 }
 
-// ===== LOAD GAME & BENCH ANALYSIS =====
+// ===== LOAD GAME & ANALYSIS =====
 async function loadGame(gamePk) {
     showLoading(true);
     picks = { away: new Set(), home: new Set() };
@@ -109,17 +109,21 @@ async function loadGame(gamePk) {
         const awayId = gd.teams.away.id;
         const homeId = gd.teams.home.id;
         
-        // Get lineups if game started
         const awayLineup = feed.liveData?.boxscore?.teams?.away?.battingOrder || [];
         const homeLineup = feed.liveData?.boxscore?.teams?.home?.battingOrder || [];
         
-        // Get active rosters with 2025 stats
-        const [awayPlayers, homePlayers] = await Promise.all([
+        const awayStarterId = gd.probablePitchers?.away?.id;
+        const homeStarterId = gd.probablePitchers?.home?.id;
+        
+        // Fetch rosters, bench players, and bullpens in parallel
+        const [awayPlayers, homePlayers, awayBullpen, homeBullpen] = await Promise.all([
             fetchBenchPlayers(awayId, awayLineup),
-            fetchBenchPlayers(homeId, homeLineup)
+            fetchBenchPlayers(homeId, homeLineup),
+            fetchBullpen(awayId, awayStarterId),
+            fetchBullpen(homeId, homeStarterId)
         ]);
         
-        renderGameDetail(gd, awayPlayers, homePlayers, awayLineup, homeLineup);
+        renderGameDetail(gd, awayPlayers, homePlayers, awayBullpen, homeBullpen, awayLineup, homeLineup);
     } catch (err) {
         console.error('Failed to load game:', err);
     }
@@ -128,19 +132,123 @@ async function loadGame(gamePk) {
     showView('game');
 }
 
-async function fetchBenchPlayers(teamId, lineup) {
-    // Get roster
+// ===== BULLPEN DATA =====
+async function fetchBullpen(teamId, starterId) {
     const rosterResp = await fetch(`${MLB_API}/teams/${teamId}/roster?rosterType=active`);
     const rosterData = await rosterResp.json();
     const roster = rosterData.roster || [];
     
-    // Filter to position players only
+    // Filter to pitchers only, exclude the starter
+    const pitchers = roster.filter(p => 
+        p.position?.abbreviation === 'P' && p.person.id !== starterId
+    );
+    
+    // Fetch stats for each pitcher
+    const statsPromises = pitchers.map(p =>
+        fetch(`${MLB_API}/people/${p.person.id}?hydrate=stats(group=[pitching],type=[season,career],season=2025)`)
+            .then(r => r.json())
+            .catch(() => null)
+    );
+    
+    const statsResults = await Promise.all(statsPromises);
+    
+    return pitchers.map((p, i) => {
+        const personData = statsResults[i]?.people?.[0] || {};
+        const seasonStats = extractPitchingStats(personData, 'season');
+        const careerStats = extractPitchingStats(personData, 'career');
+        const stats = seasonStats || careerStats || {};
+        
+        const bullpenMetrics = calcBullpenMetrics(stats, careerStats || {});
+        
+        return {
+            id: p.person.id,
+            name: personData.fullName || p.person.fullName,
+            number: p.jerseyNumber,
+            throws: personData.pitchHand?.code || '?',
+            stats: stats,
+            careerStats: careerStats || {},
+            ...bullpenMetrics
+        };
+    }).sort((a, b) => b.entryPct - a.entryPct);
+}
+
+function extractPitchingStats(personData, type) {
+    for (const s of personData.stats || []) {
+        if (s.type?.displayName === type && s.group?.displayName === 'pitching' && s.splits?.length > 0) {
+            return s.splits[0].stat;
+        }
+    }
+    return null;
+}
+
+function calcBullpenMetrics(seasonStats, careerStats) {
+    const s = seasonStats || {};
+    const c = careerStats || {};
+    
+    const gp = s.gamesPlayed || c.gamesPlayed || 0;
+    const gs = s.gamesStarted || c.gamesStarted || 0;
+    const saves = s.saves || 0;
+    const holds = s.holds || 0;
+    const era = parseFloat(s.era) || parseFloat(c.era) || 4.50;
+    const ip = parseFloat(s.inningsPitched) || 0;
+    const whip = parseFloat(s.whip) || parseFloat(c.whip) || 1.30;
+    const so = s.strikeOuts || 0;
+    const bb = s.baseOnBalls || 0;
+    
+    // Relief appearances ratio
+    const reliefGames = gp - gs;
+    
+    // Determine role
+    let role = 'MR'; // Middle Relief
+    let entryPct = 40;
+    
+    if (saves >= 5 || (c.saves || 0) >= 15) {
+        role = 'CL'; // Closer
+        entryPct = 65; // Closers pitch ~60-70% of games
+    } else if (holds >= 5 || (c.holds || 0) >= 10) {
+        role = 'SU'; // Setup
+        entryPct = 60;
+    } else if (reliefGames >= 30) {
+        role = 'MR';
+        // Scale by games played — workhorses pitch more
+        entryPct = Math.min(70, Math.max(30, Math.round(reliefGames / 162 * 100 * 1.2)));
+    } else if (reliefGames >= 15) {
+        entryPct = Math.min(55, Math.max(25, Math.round(reliefGames / 162 * 100 * 1.3)));
+    } else if (gp > 0) {
+        entryPct = Math.min(40, Math.max(15, Math.round(reliefGames / 162 * 100 * 1.5)));
+    } else {
+        entryPct = 15;
+    }
+    
+    // K rate per 9
+    const k9 = ip > 0 ? (so / ip * 9).toFixed(1) : '0.0';
+    const bb9 = ip > 0 ? (bb / ip * 9).toFixed(1) : '0.0';
+    
+    return {
+        role,
+        entryPct,
+        era: era.toFixed(2),
+        whip: whip.toFixed(2),
+        k9,
+        bb9,
+        ip: ip.toFixed(1),
+        saves,
+        holds,
+        gamesPlayed: gp,
+        reliefGames
+    };
+}
+
+// ===== BENCH PLAYER DATA =====
+async function fetchBenchPlayers(teamId, lineup) {
+    const rosterResp = await fetch(`${MLB_API}/teams/${teamId}/roster?rosterType=active`);
+    const rosterData = await rosterResp.json();
+    const roster = rosterData.roster || [];
+    
     const batters = roster.filter(p => p.position?.abbreviation !== 'P' && p.position?.abbreviation !== 'TWP');
     
-    // Fetch stats for each batter (2025 season + career)
-    const playerIds = batters.map(p => p.person.id);
-    const statsPromises = playerIds.map(id => 
-        fetch(`${MLB_API}/people/${id}?hydrate=stats(group=[hitting],type=[season,career],season=2025)`)
+    const statsPromises = batters.map(p => 
+        fetch(`${MLB_API}/people/${p.person.id}?hydrate=stats(group=[hitting],type=[season,career],season=2025)`)
             .then(r => r.json())
             .catch(() => null)
     );
@@ -149,18 +257,9 @@ async function fetchBenchPlayers(teamId, lineup) {
     
     return batters.map((p, i) => {
         const personData = statsResults[i]?.people?.[0] || {};
-        const seasonStats = extractStats(personData, 'season');
-        const careerStats = extractStats(personData, 'career');
-        
-        // Use 2025 season stats primarily, fall back to career
+        const seasonStats = extractHittingStats(personData, 'season');
+        const careerStats = extractHittingStats(personData, 'career');
         const stats = seasonStats || careerStats || {};
-        
-        const gamesPlayed = stats.gamesPlayed || 0;
-        const atBats = stats.atBats || 0;
-        const homeRuns = stats.homeRuns || 0;
-        const plateAppearances = stats.plateAppearances || 0;
-        
-        // Calculate bench metrics
         const benchMetrics = calcBenchMetrics(stats, careerStats || {}, lineup.includes(p.person.id));
         
         return {
@@ -170,14 +269,14 @@ async function fetchBenchPlayers(teamId, lineup) {
             position: p.position?.abbreviation || '??',
             bats: personData.batSide?.code || '?',
             isStarter: lineup.includes(p.person.id),
-            stats: stats,
+            stats,
             careerStats: careerStats || {},
             ...benchMetrics
         };
     });
 }
 
-function extractStats(personData, type) {
+function extractHittingStats(personData, type) {
     for (const s of personData.stats || []) {
         if (s.type?.displayName === type && s.group?.displayName === 'hitting' && s.splits?.length > 0) {
             return s.splits[0].stat;
@@ -190,44 +289,31 @@ function calcBenchMetrics(seasonStats, careerStats, isStarter) {
     const s = seasonStats || {};
     const c = careerStats || {};
     
-    // === ENTRY ODDS ===
-    // Based on games played vs a full season benchmark
-    // Bench players typically appear in 50-70% of games
-    // Use GP and context clues
     const gp = s.gamesPlayed || c.gamesPlayed || 0;
     const ab = s.atBats || 0;
     const pa = s.plateAppearances || 0;
-    
-    // AB per game — starters average ~3.5-4.0 AB/G, bench ~1.0-2.0
-    const abPerGame = gp > 0 ? ab / gp : 0;
-    const isBenchProfile = abPerGame < 3.0 && abPerGame > 0;
-    
-    // Entry likelihood for bench players (how often they get in games)
-    // Higher AB/G among bench = more likely to enter
-    let entryPct;
-    if (isStarter) {
-        entryPct = 0; // Already starting
-    } else if (gp === 0) {
-        entryPct = 15; // Unknown — low default
-    } else if (isBenchProfile) {
-        // Bench player — scale by AB/G relative to team games
-        entryPct = Math.min(85, Math.max(20, Math.round(abPerGame * 30 + 10)));
-    } else {
-        // Regular who's on the bench today — likely to PH
-        entryPct = Math.min(75, Math.max(25, Math.round(40 + abPerGame * 5)));
-    }
-    
-    // === HR ODDS (per plate appearance) ===
     const hr = s.homeRuns || 0;
     const careerHR = c.homeRuns || 0;
     const careerPA = c.plateAppearances || 0;
     
-    // HR rate — use season if enough sample, else blend with career
+    const abPerGame = gp > 0 ? ab / gp : 0;
+    const isBenchProfile = abPerGame < 3.0 && abPerGame > 0;
+    
+    let entryPct;
+    if (isStarter) {
+        entryPct = 0;
+    } else if (gp === 0) {
+        entryPct = 15;
+    } else if (isBenchProfile) {
+        entryPct = Math.min(85, Math.max(20, Math.round(abPerGame * 30 + 10)));
+    } else {
+        entryPct = Math.min(75, Math.max(25, Math.round(40 + abPerGame * 5)));
+    }
+    
     let hrRate;
     if (pa >= 100) {
         hrRate = hr / pa;
     } else if (careerPA >= 200) {
-        // Blend season and career
         const seasonRate = pa > 0 ? hr / pa : 0;
         const careerRate = careerHR / careerPA;
         const weight = Math.min(pa / 100, 1);
@@ -237,19 +323,12 @@ function calcBenchMetrics(seasonStats, careerStats, isStarter) {
     } else if (careerPA > 0) {
         hrRate = careerHR / careerPA;
     } else {
-        hrRate = 0.02; // League average ~3%
+        hrRate = 0.02;
     }
     
-    // Bench HR boost — pinch hitters swing for the fences
-    // Historical PH HR rate is actually lower, but they get favorable counts more
-    const benchHRRate = hrRate;
-    
-    // HR% per appearance (assuming ~1.5 PA if they enter)
-    const hrPerEntry = 1 - Math.pow(1 - benchHRRate, 1.5);
+    const hrPerEntry = 1 - Math.pow(1 - hrRate, 1.5);
     const hrPct = Math.round(hrPerEntry * 1000) / 10;
     
-    // === BENCH BOMB SCORE ===
-    // Combined: probability they enter AND hit a HR
     const bombScore = (entryPct / 100) * hrPerEntry;
     const bombPct = Math.round(bombScore * 1000) / 10;
     
@@ -257,16 +336,18 @@ function calcBenchMetrics(seasonStats, careerStats, isStarter) {
         entryPct: isStarter ? null : entryPct,
         hrPct: Math.max(0.1, hrPct),
         bombPct: isStarter ? null : Math.max(0.1, bombPct),
-        hrRate: hrRate,
-        abPerGame: abPerGame,
-        isBenchProfile: isBenchProfile
+        hrRate,
+        abPerGame,
+        isBenchProfile
     };
 }
 
-function renderGameDetail(gd, awayPlayers, homePlayers, awayLineup, homeLineup) {
+// ===== RENDER GAME =====
+function renderGameDetail(gd, awayPlayers, homePlayers, awayBullpen, homeBullpen, awayLineup, homeLineup) {
     const hasLineup = awayLineup.length > 0;
+    const awayPitcher = gd.probablePitchers?.away;
+    const homePitcher = gd.probablePitchers?.home;
     
-    // Game header
     document.getElementById('game-header').innerHTML = `
         <div style="display:flex;align-items:center;justify-content:center;gap:20px;">
             <img class="team-logo" src="${LOGO_URL(gd.teams.away.id)}" style="width:50px;height:50px;" onerror="this.style.display='none'">
@@ -278,22 +359,21 @@ function renderGameDetail(gd, awayPlayers, homePlayers, awayLineup, homeLineup) 
         </div>
     `;
     
-    // Info
     document.getElementById('matchup-info').innerHTML = `
         <h3>💣 Bench Bomb Watch</h3>
-        <p style="margin-top:6px;font-size:13px;opacity:0.85;">Which bench bats will enter the game and go yard?</p>
-        <div style="display:flex;justify-content:center;gap:24px;margin-top:12px;font-size:11px;opacity:0.7;">
-            <span>📊 Entry% = likelihood to enter game</span>
-            <span>💣 HR% = chance of HR if they enter</span>
-            <span>🏝️ Bomb = Entry × HR combined</span>
+        <p style="margin-top:6px;font-size:13px;opacity:0.85;">Which bench bats will enter and go yard? Scout the opposing bullpen to find the matchup edge.</p>
+        <div style="display:flex;justify-content:center;gap:20px;margin-top:12px;font-size:11px;opacity:0.7;flex-wrap:wrap;">
+            <span>📊 Entry% = likelihood to enter</span>
+            <span>💣 HR% = HR odds per entry</span>
+            <span>🏝️ Bomb = combined score</span>
         </div>
     `;
     
-    // Render team panels
-    renderTeamPanel('away', gd.teams.away, awayPlayers, hasLineup);
-    renderTeamPanel('home', gd.teams.home, homePlayers, hasLineup);
+    // Away side: away bench + HOME bullpen (they face home pitchers)
+    renderTeamPanel('away', gd.teams.away, gd.teams.home, awayPlayers, homeBullpen, homePitcher, hasLineup);
+    // Home side: home bench + AWAY bullpen (they face away pitchers)
+    renderTeamPanel('home', gd.teams.home, gd.teams.away, homePlayers, awayBullpen, awayPitcher, hasLineup);
     
-    // Submit area
     if (!hasLineup) {
         document.getElementById('submit-area').style.display = 'block';
         document.getElementById('results-area').style.display = 'none';
@@ -303,20 +383,17 @@ function renderGameDetail(gd, awayPlayers, homePlayers, awayLineup, homeLineup) 
     }
 }
 
-function renderTeamPanel(side, team, players, hasLineup) {
+function renderTeamPanel(side, battingTeam, pitchingTeam, players, bullpen, starter, hasLineup) {
     const headerEl = document.getElementById(`${side}-header`);
     const rosterEl = document.getElementById(`${side}-roster`);
     
-    // Split into starters and bench
     const starters = players.filter(p => p.isStarter);
     const bench = players.filter(p => !p.isStarter);
-    
-    // Sort bench by bomb score descending
     bench.sort((a, b) => (b.bombPct || 0) - (a.bombPct || 0));
     
     headerEl.innerHTML = `
-        <img class="team-logo" src="${LOGO_URL(team.id)}" style="width:28px;height:28px;" onerror="this.style.display='none'">
-        <span>${team.teamName}</span>
+        <img class="team-logo" src="${LOGO_URL(battingTeam.id)}" style="width:28px;height:28px;" onerror="this.style.display='none'">
+        <span>${battingTeam.teamName}</span>
         <span style="font-size:11px;color:var(--text-light);margin-left:auto;">
             ${bench.length} on bench
         </span>
@@ -324,25 +401,80 @@ function renderTeamPanel(side, team, players, hasLineup) {
     
     let html = '';
     
+    // === OPPOSING BULLPEN SECTION ===
+    html += `
+        <div class="bullpen-section">
+            <div class="section-label bullpen-label">
+                <img class="team-logo" src="${LOGO_URL(pitchingTeam.id)}" style="width:18px;height:18px;vertical-align:middle;" onerror="this.style.display='none'">
+                ${pitchingTeam.teamName} Bullpen
+            </div>
+            ${starter ? `
+                <div class="starter-pitcher-row">
+                    <span class="sp-badge">SP</span>
+                    <span class="sp-name">${starter.fullName || 'TBD'}</span>
+                    <span class="pitcher-hand ${starter.pitchHand?.code || ''}">${starter.pitchHand?.code || '?'}HP</span>
+                </div>
+            ` : ''}
+            <div class="bullpen-grid">
+                ${bullpen.length > 0 ? bullpen.map(p => renderBullpenCard(p)).join('') : '<div style="padding:8px 10px;font-size:12px;color:var(--text-light);">Bullpen data not available</div>'}
+            </div>
+        </div>
+    `;
+    
+    // === BENCH SECTION ===
     if (hasLineup && starters.length > 0) {
-        html += `<div class="section-label">Starting Lineup</div>`;
-        html += starters.map(p => renderStarterRow(p)).join('');
-        html += `<div class="section-label" style="margin-top:12px;">🏝️ The Bench — Bomb Candidates</div>`;
+        html += `<div class="section-label">💣 Bench — Bomb Candidates</div>`;
     } else {
-        html += `<div class="section-label">🏝️ Bench Bomb Rankings</div>`;
-        html += `<div style="font-size:11px;color:var(--text-light);padding:0 10px 8px;">Lineups not yet posted — showing full roster ranked by bomb potential</div>`;
+        html += `<div class="section-label">💣 Bench Bomb Rankings</div>`;
+        if (!hasLineup) {
+            html += `<div style="font-size:11px;color:var(--text-light);padding:0 10px 8px;">Lineups not posted yet — full roster ranked by bomb potential</div>`;
+        }
     }
     
     if (bench.length === 0 && !hasLineup) {
-        // No lineup yet — show all players ranked
         const allRanked = [...players].sort((a, b) => (b.hrPct || 0) - (a.hrPct || 0));
-        html = `<div class="section-label">🏝️ Roster — Bomb Potential Rankings</div>`;
         html += allRanked.map((p, i) => renderBenchRow(p, side, i + 1, false)).join('');
     } else {
         html += bench.map((p, i) => renderBenchRow(p, side, i + 1, true)).join('');
     }
     
+    if (hasLineup && starters.length > 0) {
+        html += `<div class="section-label" style="margin-top:8px;opacity:0.5;">Starting Lineup</div>`;
+        html += starters.map(p => renderStarterRow(p)).join('');
+    }
+    
     rosterEl.innerHTML = html;
+}
+
+function renderBullpenCard(p) {
+    const handClass = p.throws === 'L' ? 'lefty' : p.throws === 'R' ? 'righty' : 'switch';
+    const entryLevel = p.entryPct >= 55 ? 'high' : p.entryPct >= 35 ? 'mid' : 'low';
+    
+    const roleBadge = {
+        'CL': { label: 'CLOSER', class: 'role-closer' },
+        'SU': { label: 'SETUP', class: 'role-setup' },
+        'MR': { label: 'MIDDLE', class: 'role-middle' }
+    }[p.role] || { label: 'RP', class: 'role-middle' };
+    
+    return `
+    <div class="bullpen-card ${handClass}-card">
+        <div class="bp-top">
+            <span class="bp-role ${roleBadge.class}">${roleBadge.label}</span>
+            <span class="bp-entry bp-entry-${entryLevel}">${p.entryPct}%</span>
+        </div>
+        <div class="bp-name">${p.name}</div>
+        <div class="bp-meta">
+            <span class="pitcher-hand ${p.throws}">${p.throws}HP</span>
+            ${p.number ? `<span>#${p.number}</span>` : ''}
+        </div>
+        <div class="bp-stats">
+            <span title="ERA">${p.era} ERA</span>
+            <span title="WHIP">${p.whip} W</span>
+            <span title="K/9">${p.k9} K</span>
+        </div>
+        ${p.saves > 0 ? `<div class="bp-saves">${p.saves} SV</div>` : ''}
+        ${p.holds > 0 ? `<div class="bp-saves">${p.holds} HLD</div>` : ''}
+    </div>`;
 }
 
 function renderStarterRow(p) {
@@ -358,7 +490,7 @@ function renderStarterRow(p) {
             </div>
         </div>
         <div class="stat-pills">
-            <span class="stat-pill hr-pill" title="HR Rate">${p.stats?.homeRuns || 0} HR</span>
+            <span class="stat-pill hr-pill"><span class="pill-label">HR</span><span class="pill-value">${p.stats?.homeRuns || 0}</span></span>
         </div>
     </div>`;
 }
@@ -366,7 +498,6 @@ function renderStarterRow(p) {
 function renderBenchRow(p, side, rank, showEntry) {
     const isSelected = picks[side].has(p.id);
     const bombLevel = p.bombPct >= 3 ? 'hot' : p.bombPct >= 1.5 ? 'warm' : 'cold';
-    const hrLevel = p.hrPct >= 5 ? 'hot' : p.hrPct >= 3 ? 'warm' : 'cold';
     
     return `
     <div class="player-row bench-row ${isSelected ? 'selected' : ''} ${bombLevel}-bomb" 
@@ -382,9 +513,9 @@ function renderBenchRow(p, side, rank, showEntry) {
             </div>
         </div>
         <div class="stat-pills">
-            ${showEntry ? `<div class="stat-pill entry-pill" title="Entry Likelihood"><span class="pill-label">Entry</span><span class="pill-value">${p.entryPct}%</span></div>` : ''}
-            <div class="stat-pill hr-pill ${hrLevel}-pill" title="HR% if enters"><span class="pill-label">HR</span><span class="pill-value">${p.hrPct}%</span></div>
-            ${showEntry ? `<div class="stat-pill bomb-pill ${bombLevel}-pill" title="Bench Bomb Score"><span class="pill-label">💣</span><span class="pill-value">${p.bombPct}%</span></div>` : ''}
+            ${showEntry ? `<div class="stat-pill entry-pill"><span class="pill-label">Entry</span><span class="pill-value">${p.entryPct}%</span></div>` : ''}
+            <div class="stat-pill hr-pill"><span class="pill-label">HR</span><span class="pill-value">${p.hrPct}%</span></div>
+            ${showEntry ? `<div class="stat-pill bomb-pill ${bombLevel}-pill"><span class="pill-label">💣</span><span class="pill-value">${p.bombPct}%</span></div>` : ''}
         </div>
     </div>`;
 }
@@ -396,18 +527,17 @@ function togglePick(side, playerId) {
     } else {
         picks[side].add(playerId);
     }
-    
     const row = document.querySelector(`#${side}-roster .player-row[data-player-id="${playerId}"]`);
     if (row) row.classList.toggle('selected');
-    
     updatePickCount();
     savePicks();
 }
 
 function updatePickCount() {
     const total = picks.away.size + picks.home.size;
-    const el = document.getElementById('pick-count');
-    el.textContent = total === 0 ? 'Tap bench players you think will enter and hit a HR 💣' : `${total} bench bomb${total !== 1 ? 's' : ''} selected`;
+    document.getElementById('pick-count').textContent = total === 0 
+        ? 'Tap bench players you think will enter and hit a HR 💣' 
+        : `${total} bench bomb${total !== 1 ? 's' : ''} selected`;
 }
 
 function submitPicks() {
@@ -424,8 +554,7 @@ function submitPicks() {
 
 function savePicks() {
     if (!currentGame) return;
-    const gamePk = currentGame.gameData.game.pk;
-    localStorage.setItem(`platoon_${gamePk}`, JSON.stringify({
+    localStorage.setItem(`platoon_${currentGame.gameData.game.pk}`, JSON.stringify({
         away: [...picks.away], home: [...picks.home], timestamp: new Date().toISOString()
     }));
 }
@@ -435,9 +564,5 @@ function showView(view) {
     document.querySelectorAll('.view').forEach(v => v.style.display = 'none');
     document.getElementById(`${view}-view`).style.display = 'block';
 }
-
 function showGames() { showView('games'); currentGame = null; }
-
-function showLoading(show) {
-    document.getElementById('loading').style.display = show ? 'block' : 'none';
-}
+function showLoading(show) { document.getElementById('loading').style.display = show ? 'block' : 'none'; }
