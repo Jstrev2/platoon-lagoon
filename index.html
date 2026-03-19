@@ -16,7 +16,7 @@
                     <span class="logo-icon">🏝️</span>
                     <span class="logo-text">The Platoon Lagoon</span>
                 </h1>
-                <p class="tagline">Which bench bats will come in and go yard? 💣</p>
+                <p class="tagline">Bench bats most likely to enter and go yard 💣</p>
             </div>
             <div class="date-nav">
                 <button class="date-btn" onclick="changeDate(-1)">◀</button>
@@ -32,8 +32,8 @@
 
         <div id="games-view" class="view" style="display:none;">
             <div class="info-banner">
-                💣 <strong>Bench Bombs</strong> — Pick the bench players most likely to enter the game and hit a home run.
-                Stats powered by Entry%, HR%, and the combined Bomb Score.
+                💣 <strong>Bench Bombs</strong> — The bench players most likely to enter each game and hit a home run, ranked by Bomb Score.
+                Scout the opposing bullpen to spot the matchup edge.
             </div>
             <div id="games-grid" class="games-grid"></div>
             <div id="no-games" class="no-games" style="display:none;">
@@ -56,11 +56,6 @@
                     <div class="roster-list" id="home-roster"></div>
                 </div>
             </div>
-            <div id="submit-area" class="submit-area" style="display:none;">
-                <button class="submit-btn" onclick="submitPicks()">💣 Lock In My Bombs</button>
-                <p class="pick-count" id="pick-count"></p>
-            </div>
-            <div id="results-area" class="results-area" style="display:none;"></div>
         </div>
     </div>
 
