@@ -426,33 +426,88 @@ body {
 .player-bats.R { background: #fce7f3; color: #be185d; }
 .player-bats.S { background: #e9d5ff; color: #7c3aed; }
 
-.platoon-tag {
-    font-size: 10px;
-    background: linear-gradient(135deg, var(--sunset), var(--coral));
-    color: white;
-    padding: 2px 6px;
-    border-radius: 10px;
-    font-weight: 600;
-    white-space: nowrap;
+/* ===== BENCH BOMB STYLES ===== */
+.section-label {
+    font-weight: 700;
+    font-size: 12px;
+    color: var(--lagoon-dark);
+    padding: 10px 10px 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 
-.splits-bar {
-    width: 50px;
-    height: 6px;
-    border-radius: 3px;
-    background: #e2e8f0;
-    overflow: hidden;
+.rank-badge {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 11px;
     flex-shrink: 0;
 }
 
-.splits-fill {
-    height: 100%;
-    border-radius: 3px;
-    transition: width 0.3s;
+.rank-hot { background: linear-gradient(135deg, #f43f5e, #fb923c); color: white; }
+.rank-warm { background: linear-gradient(135deg, #f59e0b, #fbbf24); color: white; }
+.rank-cold { background: #e2e8f0; color: #64748b; }
+.starter-badge { background: var(--palm-light); color: white; font-size: 13px; }
+
+.starter-row {
+    opacity: 0.6;
+    cursor: default !important;
 }
-.splits-fill.hot { background: var(--palm-light); }
-.splits-fill.warm { background: var(--sand-dark); }
-.splits-fill.cold { background: var(--coral); }
+
+.bench-row { cursor: pointer; }
+.bench-row.hot-bomb { border-left: 3px solid var(--coral); }
+.bench-row.warm-bomb { border-left: 3px solid var(--sand-dark); }
+
+.stat-pills {
+    display: flex;
+    gap: 4px;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.stat-pill {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 3px 6px;
+    border-radius: 6px;
+    background: #f1f5f9;
+    min-width: 42px;
+}
+
+.pill-label {
+    font-size: 8px;
+    font-weight: 600;
+    color: var(--text-light);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.pill-value {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.entry-pill { background: #dbeafe; }
+.entry-pill .pill-value { color: #1d4ed8; }
+
+.hr-pill { background: #fce7f3; }
+.hr-pill .pill-value { color: #be185d; }
+
+.bomb-pill { background: linear-gradient(135deg, #fef3c7, #fed7aa); }
+.bomb-pill .pill-value { color: #c2410c; }
+
+.hot-pill { background: linear-gradient(135deg, #fee2e2, #fecaca) !important; }
+.hot-pill .pill-value { color: #dc2626 !important; }
+
+.warm-pill .pill-value { color: #d97706; }
+.cold-pill .pill-value { color: #64748b; }
 
 /* ===== SUBMIT ===== */
 .submit-area {

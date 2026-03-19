@@ -1,4 +1,4 @@
-// ===== THE PLATOON LAGOON =====
+// ===== THE PLATOON LAGOON — BENCH BOMBS 💣 =====
 
 const MLB_API = 'https://statsapi.mlb.com/api/v1';
 const LOGO_URL = (id) => `https://www.mlbstatic.com/team-logos/${id}.svg`;
@@ -6,7 +6,6 @@ const LOGO_URL = (id) => `https://www.mlbstatic.com/team-logos/${id}.svg`;
 let currentDate = new Date();
 let currentGame = null;
 let picks = { away: new Set(), home: new Set() };
-let rosterCache = {};
 
 // ===== DATE HELPERS =====
 function formatDate(d) {
@@ -16,15 +15,12 @@ function apiDate(d) {
     return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 function gameTime(iso) {
-    const d = new Date(iso);
-    return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
+    return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
 }
 
 // ===== INIT =====
 document.addEventListener('DOMContentLoaded', () => {
-    // Try to use Chicago time for default
-    const now = new Date();
-    currentDate = now;
+    currentDate = new Date();
     loadGames();
 });
 
@@ -39,15 +35,12 @@ async function loadGames() {
     document.getElementById('current-date').textContent = formatDate(currentDate);
     
     try {
-        const dateStr = apiDate(currentDate);
-        const resp = await fetch(`${MLB_API}/schedule?date=${dateStr}&sportId=1&hydrate=probablePitcher(note),team,linescore`);
+        const resp = await fetch(`${MLB_API}/schedule?date=${apiDate(currentDate)}&sportId=1&hydrate=probablePitcher(note),team,linescore`);
         const data = await resp.json();
-        
-        const games = data.dates?.[0]?.games || [];
-        renderGames(games);
+        renderGames(data.dates?.[0]?.games || []);
     } catch (err) {
         console.error('Failed to load games:', err);
-        document.getElementById('games-grid').innerHTML = '<p class="no-games">🌊 Tide\'s out. Couldn\'t reach the MLB API.</p>';
+        document.getElementById('games-grid').innerHTML = '<p style="text-align:center;padding:40px;color:#64748b;">🌊 Couldn\'t reach the MLB API.</p>';
     }
     
     showLoading(false);
@@ -69,24 +62,21 @@ function renderGames(games) {
     grid.innerHTML = games.map(g => {
         const away = g.teams.away;
         const home = g.teams.home;
-        const awayP = g.teams.away.probablePitcher;
-        const homeP = g.teams.home.probablePitcher;
-        
         const state = g.status.abstractGameState;
         let statusClass = 'preview';
         let statusText = gameTime(g.gameDate);
-        if (state === 'Live') { statusClass = 'live'; statusText = 'LIVE'; }
+        if (state === 'Live') { statusClass = 'live'; statusText = g.linescore ? `${g.linescore.currentInningOrdinal || ''} ${g.linescore.inningHalf || ''}` : 'LIVE'; }
         if (state === 'Final') { statusClass = 'final'; statusText = 'FINAL'; }
         
         return `
         <div class="game-card" onclick="loadGame(${g.gamePk})">
             <div style="display:flex;justify-content:space-between;align-items:center;">
                 <span class="game-status ${statusClass}">${statusText}</span>
-                <span style="font-size:11px;color:var(--text-light);">${g.gameType === 'S' ? 'Spring Training' : g.gameType === 'R' ? 'Regular Season' : g.gameType}</span>
+                <span style="font-size:11px;color:var(--text-light);">${g.gameType === 'S' ? 'Spring Training' : g.gameType === 'R' ? '' : g.gameType}</span>
             </div>
             <div class="game-card-teams" style="margin-top:10px;">
                 <div class="game-card-team">
-                    <img class="team-logo" src="${LOGO_URL(away.team.id)}" alt="${away.team.teamName}" onerror="this.style.display='none'">
+                    <img class="team-logo" src="${LOGO_URL(away.team.id)}" alt="" onerror="this.style.display='none'">
                     <div>
                         <div class="team-name">${away.team.teamName}</div>
                         <div class="team-record">${away.leagueRecord ? `${away.leagueRecord.wins}-${away.leagueRecord.losses}` : ''}</div>
@@ -98,52 +88,38 @@ function renderGames(games) {
                         <div class="team-name">${home.team.teamName}</div>
                         <div class="team-record">${home.leagueRecord ? `${home.leagueRecord.wins}-${home.leagueRecord.losses}` : ''}</div>
                     </div>
-                    <img class="team-logo" src="${LOGO_URL(home.team.id)}" alt="${home.team.teamName}" onerror="this.style.display='none'">
-                </div>
-            </div>
-            <div class="game-card-pitchers">
-                <div>
-                    ${awayP ? `<span class="pitcher-name">${awayP.fullName}</span><span class="pitcher-hand ${awayP.pitchHand?.code || ''}">${awayP.pitchHand?.code || '?'}HP</span>` : '<span style="opacity:0.5">TBD</span>'}
-                </div>
-                <div>
-                    ${homeP ? `<span class="pitcher-name">${homeP.fullName}</span><span class="pitcher-hand ${homeP.pitchHand?.code || ''}">${homeP.pitchHand?.code || '?'}HP</span>` : '<span style="opacity:0.5">TBD</span>'}
+                    <img class="team-logo" src="${LOGO_URL(home.team.id)}" alt="" onerror="this.style.display='none'">
                 </div>
             </div>
         </div>`;
     }).join('');
 }
 
-// ===== LOAD GAME DETAIL =====
+// ===== LOAD GAME & BENCH ANALYSIS =====
 async function loadGame(gamePk) {
     showLoading(true);
     picks = { away: new Set(), home: new Set() };
     
     try {
-        // Get game feed
         const feedResp = await fetch(`https://statsapi.mlb.com/api/v1.1/game/${gamePk}/feed/live`);
         const feed = await feedResp.json();
-        
         currentGame = feed;
         
         const gd = feed.gameData;
         const awayId = gd.teams.away.id;
         const homeId = gd.teams.home.id;
         
-        // Get rosters with hydrated player info
-        const [awayRoster, homeRoster] = await Promise.all([
-            fetchRoster(awayId),
-            fetchRoster(homeId)
-        ]);
-        
-        // Get actual lineup if game has started
+        // Get lineups if game started
         const awayLineup = feed.liveData?.boxscore?.teams?.away?.battingOrder || [];
         const homeLineup = feed.liveData?.boxscore?.teams?.home?.battingOrder || [];
         
-        // Get probable pitchers
-        const awayPitcher = gd.probablePitchers?.away;
-        const homePitcher = gd.probablePitchers?.home;
+        // Get active rosters with 2025 stats
+        const [awayPlayers, homePlayers] = await Promise.all([
+            fetchBenchPlayers(awayId, awayLineup),
+            fetchBenchPlayers(homeId, homeLineup)
+        ]);
         
-        renderGameDetail(gd, awayRoster, homeRoster, awayPitcher, homePitcher, awayLineup, homeLineup);
+        renderGameDetail(gd, awayPlayers, homePlayers, awayLineup, homeLineup);
     } catch (err) {
         console.error('Failed to load game:', err);
     }
@@ -152,26 +128,143 @@ async function loadGame(gamePk) {
     showView('game');
 }
 
-async function fetchRoster(teamId) {
-    if (rosterCache[teamId]) return rosterCache[teamId];
+async function fetchBenchPlayers(teamId, lineup) {
+    // Get roster
+    const rosterResp = await fetch(`${MLB_API}/teams/${teamId}/roster?rosterType=active`);
+    const rosterData = await rosterResp.json();
+    const roster = rosterData.roster || [];
     
-    try {
-        const resp = await fetch(`${MLB_API}/teams/${teamId}/roster?rosterType=active&hydrate=person(stats(type=season,season=2026,gameType=R),currentTeam)`);
-        const data = await resp.json();
-        rosterCache[teamId] = data.roster || [];
-        return rosterCache[teamId];
-    } catch {
-        // Fallback to 40-man
-        const resp = await fetch(`${MLB_API}/teams/${teamId}/roster?rosterType=40Man&hydrate=person(stats(type=season),currentTeam)`);
-        const data = await resp.json();
-        rosterCache[teamId] = data.roster || [];
-        return rosterCache[teamId];
-    }
+    // Filter to position players only
+    const batters = roster.filter(p => p.position?.abbreviation !== 'P' && p.position?.abbreviation !== 'TWP');
+    
+    // Fetch stats for each batter (2025 season + career)
+    const playerIds = batters.map(p => p.person.id);
+    const statsPromises = playerIds.map(id => 
+        fetch(`${MLB_API}/people/${id}?hydrate=stats(group=[hitting],type=[season,career],season=2025)`)
+            .then(r => r.json())
+            .catch(() => null)
+    );
+    
+    const statsResults = await Promise.all(statsPromises);
+    
+    return batters.map((p, i) => {
+        const personData = statsResults[i]?.people?.[0] || {};
+        const seasonStats = extractStats(personData, 'season');
+        const careerStats = extractStats(personData, 'career');
+        
+        // Use 2025 season stats primarily, fall back to career
+        const stats = seasonStats || careerStats || {};
+        
+        const gamesPlayed = stats.gamesPlayed || 0;
+        const atBats = stats.atBats || 0;
+        const homeRuns = stats.homeRuns || 0;
+        const plateAppearances = stats.plateAppearances || 0;
+        
+        // Calculate bench metrics
+        const benchMetrics = calcBenchMetrics(stats, careerStats || {}, lineup.includes(p.person.id));
+        
+        return {
+            id: p.person.id,
+            name: personData.fullName || p.person.fullName,
+            number: p.jerseyNumber,
+            position: p.position?.abbreviation || '??',
+            bats: personData.batSide?.code || '?',
+            isStarter: lineup.includes(p.person.id),
+            stats: stats,
+            careerStats: careerStats || {},
+            ...benchMetrics
+        };
+    });
 }
 
-function renderGameDetail(gd, awayRoster, homeRoster, awayPitcher, homePitcher, awayLineup, homeLineup) {
-    const state = gd.status.abstractGameState;
-    const hasLineup = awayLineup.length > 0 || homeLineup.length > 0;
+function extractStats(personData, type) {
+    for (const s of personData.stats || []) {
+        if (s.type?.displayName === type && s.group?.displayName === 'hitting' && s.splits?.length > 0) {
+            return s.splits[0].stat;
+        }
+    }
+    return null;
+}
+
+function calcBenchMetrics(seasonStats, careerStats, isStarter) {
+    const s = seasonStats || {};
+    const c = careerStats || {};
+    
+    // === ENTRY ODDS ===
+    // Based on games played vs a full season benchmark
+    // Bench players typically appear in 50-70% of games
+    // Use GP and context clues
+    const gp = s.gamesPlayed || c.gamesPlayed || 0;
+    const ab = s.atBats || 0;
+    const pa = s.plateAppearances || 0;
+    
+    // AB per game — starters average ~3.5-4.0 AB/G, bench ~1.0-2.0
+    const abPerGame = gp > 0 ? ab / gp : 0;
+    const isBenchProfile = abPerGame < 3.0 && abPerGame > 0;
+    
+    // Entry likelihood for bench players (how often they get in games)
+    // Higher AB/G among bench = more likely to enter
+    let entryPct;
+    if (isStarter) {
+        entryPct = 0; // Already starting
+    } else if (gp === 0) {
+        entryPct = 15; // Unknown — low default
+    } else if (isBenchProfile) {
+        // Bench player — scale by AB/G relative to team games
+        entryPct = Math.min(85, Math.max(20, Math.round(abPerGame * 30 + 10)));
+    } else {
+        // Regular who's on the bench today — likely to PH
+        entryPct = Math.min(75, Math.max(25, Math.round(40 + abPerGame * 5)));
+    }
+    
+    // === HR ODDS (per plate appearance) ===
+    const hr = s.homeRuns || 0;
+    const careerHR = c.homeRuns || 0;
+    const careerPA = c.plateAppearances || 0;
+    
+    // HR rate — use season if enough sample, else blend with career
+    let hrRate;
+    if (pa >= 100) {
+        hrRate = hr / pa;
+    } else if (careerPA >= 200) {
+        // Blend season and career
+        const seasonRate = pa > 0 ? hr / pa : 0;
+        const careerRate = careerHR / careerPA;
+        const weight = Math.min(pa / 100, 1);
+        hrRate = seasonRate * weight + careerRate * (1 - weight);
+    } else if (pa > 0) {
+        hrRate = hr / pa;
+    } else if (careerPA > 0) {
+        hrRate = careerHR / careerPA;
+    } else {
+        hrRate = 0.02; // League average ~3%
+    }
+    
+    // Bench HR boost — pinch hitters swing for the fences
+    // Historical PH HR rate is actually lower, but they get favorable counts more
+    const benchHRRate = hrRate;
+    
+    // HR% per appearance (assuming ~1.5 PA if they enter)
+    const hrPerEntry = 1 - Math.pow(1 - benchHRRate, 1.5);
+    const hrPct = Math.round(hrPerEntry * 1000) / 10;
+    
+    // === BENCH BOMB SCORE ===
+    // Combined: probability they enter AND hit a HR
+    const bombScore = (entryPct / 100) * hrPerEntry;
+    const bombPct = Math.round(bombScore * 1000) / 10;
+    
+    return {
+        entryPct: isStarter ? null : entryPct,
+        hrPct: Math.max(0.1, hrPct),
+        bombPct: isStarter ? null : Math.max(0.1, bombPct),
+        hrRate: hrRate,
+        abPerGame: abPerGame,
+        isBenchProfile: isBenchProfile
+    };
+}
+
+function renderGameDetail(gd, awayPlayers, homePlayers, awayLineup, homeLineup) {
+    const hasLineup = awayLineup.length > 0;
     
     // Game header
     document.getElementById('game-header').innerHTML = `
@@ -185,124 +278,118 @@ function renderGameDetail(gd, awayRoster, homeRoster, awayPitcher, homePitcher, 
         </div>
     `;
     
-    // Matchup info with pitchers
-    const awayHand = awayPitcher?.pitchHand?.code || '?';
-    const homeHand = homePitcher?.pitchHand?.code || '?';
-    
+    // Info
     document.getElementById('matchup-info').innerHTML = `
-        <h3>⚾ Pitching Matchup</h3>
-        <div class="matchup-pitcher">
-            <div class="side">
-                <div class="name">${awayPitcher?.fullName || 'TBD'}</div>
-                <span class="hand-badge ${awayHand}">${awayHand === 'L' ? '🫲 Lefty' : awayHand === 'R' ? '🫱 Righty' : awayHand === 'S' ? '🔄 Switch' : '❓ TBD'}</span>
-                <div style="font-size:11px;margin-top:4px;opacity:0.7">Pitching for ${gd.teams.away.teamName}</div>
-            </div>
-            <div style="font-size:20px;">vs</div>
-            <div class="side">
-                <div class="name">${homePitcher?.fullName || 'TBD'}</div>
-                <span class="hand-badge ${homeHand}">${homeHand === 'L' ? '🫲 Lefty' : homeHand === 'R' ? '🫱 Righty' : homeHand === 'S' ? '🔄 Switch' : '❓ TBD'}</span>
-                <div style="font-size:11px;margin-top:4px;opacity:0.7">Pitching for ${gd.teams.home.teamName}</div>
-            </div>
-        </div>
-        <div style="margin-top:12px;font-size:12px;opacity:0.7;">
-            💡 Select players you think will crack the lineup based on the pitching matchup
+        <h3>💣 Bench Bomb Watch</h3>
+        <p style="margin-top:6px;font-size:13px;opacity:0.85;">Which bench bats will enter the game and go yard?</p>
+        <div style="display:flex;justify-content:center;gap:24px;margin-top:12px;font-size:11px;opacity:0.7;">
+            <span>📊 Entry% = likelihood to enter game</span>
+            <span>💣 HR% = chance of HR if they enter</span>
+            <span>🏝️ Bomb = Entry × HR combined</span>
         </div>
     `;
     
-    // Render rosters
-    const awayBatters = filterBatters(awayRoster);
-    const homeBatters = filterBatters(homeRoster);
+    // Render team panels
+    renderTeamPanel('away', gd.teams.away, awayPlayers, hasLineup);
+    renderTeamPanel('home', gd.teams.home, homePlayers, hasLineup);
     
-    // Determine platoon candidates based on opposing pitcher hand
-    // Away team faces HOME pitcher, Home team faces AWAY pitcher
-    const awayFacing = homeHand; // away batters face home pitcher
-    const homeFacing = awayHand; // home batters face away pitcher
-    
-    renderRosterPanel('away', gd.teams.away, awayBatters, awayFacing, awayLineup, hasLineup);
-    renderRosterPanel('home', gd.teams.home, homeBatters, homeFacing, homeLineup, hasLineup);
-    
-    // Show submit or results
+    // Submit area
     if (!hasLineup) {
         document.getElementById('submit-area').style.display = 'block';
         document.getElementById('results-area').style.display = 'none';
         updatePickCount();
     } else {
         document.getElementById('submit-area').style.display = 'none';
-        // Show results if user had saved picks
-        checkResults(awayLineup, homeLineup);
     }
 }
 
-function filterBatters(roster) {
-    return roster
-        .filter(p => {
-            const pos = p.position?.abbreviation || '';
-            return pos !== 'P' && pos !== 'TWP';
-        })
-        .map(p => ({
-            id: p.person.id,
-            name: p.person.fullName,
-            number: p.jerseyNumber,
-            position: p.position?.abbreviation || '??',
-            bats: p.person.batSide?.code || '?',
-            status: p.status?.description || 'Active',
-        }))
-        .sort((a, b) => {
-            // Sort: OF/IF first, then by position
-            const posOrder = { 'C': 1, '1B': 2, '2B': 3, '3B': 4, 'SS': 5, 'LF': 6, 'CF': 7, 'RF': 8, 'OF': 9, 'DH': 10, 'IF': 11, 'UT': 12 };
-            return (posOrder[a.position] || 20) - (posOrder[b.position] || 20);
-        });
-}
-
-function renderRosterPanel(side, team, batters, facingHand, lineup, hasLineup) {
+function renderTeamPanel(side, team, players, hasLineup) {
     const headerEl = document.getElementById(`${side}-header`);
     const rosterEl = document.getElementById(`${side}-roster`);
+    
+    // Split into starters and bench
+    const starters = players.filter(p => p.isStarter);
+    const bench = players.filter(p => !p.isStarter);
+    
+    // Sort bench by bomb score descending
+    bench.sort((a, b) => (b.bombPct || 0) - (a.bombPct || 0));
     
     headerEl.innerHTML = `
         <img class="team-logo" src="${LOGO_URL(team.id)}" style="width:28px;height:28px;" onerror="this.style.display='none'">
         <span>${team.teamName}</span>
         <span style="font-size:11px;color:var(--text-light);margin-left:auto;">
-            Facing ${facingHand === 'L' ? '🫲 LHP' : facingHand === 'R' ? '🫱 RHP' : '❓ TBD'}
+            ${bench.length} on bench
         </span>
     `;
     
-    rosterEl.innerHTML = batters.map(p => {
-        const isPlatoon = isPlatoonCandidate(p.bats, facingHand);
-        const inLineup = lineup.includes(p.id);
-        const isSelected = picks[side].has(p.id);
-        
-        let rowClass = 'player-row';
-        if (hasLineup && isSelected && inLineup) rowClass += ' confirmed';
-        else if (hasLineup && isSelected && !inLineup) rowClass += ' missed';
-        else if (isSelected) rowClass += ' selected';
-        if (isPlatoon) rowClass += ' platoon-candidate';
-        
-        return `
-        <div class="${rowClass}" onclick="togglePick('${side}', ${p.id})" data-player-id="${p.id}">
-            <div class="player-checkbox">${isSelected ? '✓' : ''}</div>
-            <div class="player-info">
-                <div class="player-name">${p.name}</div>
-                <div class="player-meta">
-                    <span class="player-pos">${p.position}</span>
-                    <span class="player-bats ${p.bats}">Bats ${p.bats}</span>
-                    ${p.number ? `<span>#${p.number}</span>` : ''}
-                    ${isPlatoon ? '<span class="platoon-tag">🏝️ Platoon?</span>' : ''}
-                </div>
+    let html = '';
+    
+    if (hasLineup && starters.length > 0) {
+        html += `<div class="section-label">Starting Lineup</div>`;
+        html += starters.map(p => renderStarterRow(p)).join('');
+        html += `<div class="section-label" style="margin-top:12px;">🏝️ The Bench — Bomb Candidates</div>`;
+    } else {
+        html += `<div class="section-label">🏝️ Bench Bomb Rankings</div>`;
+        html += `<div style="font-size:11px;color:var(--text-light);padding:0 10px 8px;">Lineups not yet posted — showing full roster ranked by bomb potential</div>`;
+    }
+    
+    if (bench.length === 0 && !hasLineup) {
+        // No lineup yet — show all players ranked
+        const allRanked = [...players].sort((a, b) => (b.hrPct || 0) - (a.hrPct || 0));
+        html = `<div class="section-label">🏝️ Roster — Bomb Potential Rankings</div>`;
+        html += allRanked.map((p, i) => renderBenchRow(p, side, i + 1, false)).join('');
+    } else {
+        html += bench.map((p, i) => renderBenchRow(p, side, i + 1, true)).join('');
+    }
+    
+    rosterEl.innerHTML = html;
+}
+
+function renderStarterRow(p) {
+    return `
+    <div class="player-row starter-row">
+        <div class="rank-badge starter-badge">✓</div>
+        <div class="player-info">
+            <div class="player-name">${p.name}</div>
+            <div class="player-meta">
+                <span class="player-pos">${p.position}</span>
+                <span class="player-bats ${p.bats}">Bats ${p.bats}</span>
+                ${p.number ? `<span>#${p.number}</span>` : ''}
             </div>
-        </div>`;
-    }).join('');
+        </div>
+        <div class="stat-pills">
+            <span class="stat-pill hr-pill" title="HR Rate">${p.stats?.homeRuns || 0} HR</span>
+        </div>
+    </div>`;
 }
 
-function isPlatoonCandidate(bats, facingHand) {
-    // A platoon candidate bats from the side that has the advantage
-    // L batters vs R pitchers = advantage (so L batter is platoon candidate vs RHP)
-    // R batters vs L pitchers = advantage (so R batter is platoon candidate vs LHP)
-    if (facingHand === 'R' && bats === 'L') return true;
-    if (facingHand === 'L' && bats === 'R') return true;
-    // Switch hitters are never platoon candidates
-    return false;
+function renderBenchRow(p, side, rank, showEntry) {
+    const isSelected = picks[side].has(p.id);
+    const bombLevel = p.bombPct >= 3 ? 'hot' : p.bombPct >= 1.5 ? 'warm' : 'cold';
+    const hrLevel = p.hrPct >= 5 ? 'hot' : p.hrPct >= 3 ? 'warm' : 'cold';
+    
+    return `
+    <div class="player-row bench-row ${isSelected ? 'selected' : ''} ${bombLevel}-bomb" 
+         onclick="togglePick('${side}', ${p.id})" data-player-id="${p.id}">
+        <div class="rank-badge rank-${bombLevel}">${rank}</div>
+        <div class="player-info">
+            <div class="player-name">${p.name}</div>
+            <div class="player-meta">
+                <span class="player-pos">${p.position}</span>
+                <span class="player-bats ${p.bats}">Bats ${p.bats}</span>
+                ${p.number ? `<span>#${p.number}</span>` : ''}
+                ${p.stats ? `<span>${p.stats.homeRuns || 0} HR / ${p.stats.atBats || 0} AB</span>` : ''}
+            </div>
+        </div>
+        <div class="stat-pills">
+            ${showEntry ? `<div class="stat-pill entry-pill" title="Entry Likelihood"><span class="pill-label">Entry</span><span class="pill-value">${p.entryPct}%</span></div>` : ''}
+            <div class="stat-pill hr-pill ${hrLevel}-pill" title="HR% if enters"><span class="pill-label">HR</span><span class="pill-value">${p.hrPct}%</span></div>
+            ${showEntry ? `<div class="stat-pill bomb-pill ${bombLevel}-pill" title="Bench Bomb Score"><span class="pill-label">💣</span><span class="pill-value">${p.bombPct}%</span></div>` : ''}
+        </div>
+    </div>`;
 }
 
+// ===== PICKS =====
 function togglePick(side, playerId) {
     if (picks[side].has(playerId)) {
         picks[side].delete(playerId);
@@ -310,13 +397,8 @@ function togglePick(side, playerId) {
         picks[side].add(playerId);
     }
     
-    // Update the row visually
     const row = document.querySelector(`#${side}-roster .player-row[data-player-id="${playerId}"]`);
-    if (row) {
-        row.classList.toggle('selected');
-        const checkbox = row.querySelector('.player-checkbox');
-        checkbox.textContent = picks[side].has(playerId) ? '✓' : '';
-    }
+    if (row) row.classList.toggle('selected');
     
     updatePickCount();
     savePicks();
@@ -325,81 +407,27 @@ function togglePick(side, playerId) {
 function updatePickCount() {
     const total = picks.away.size + picks.home.size;
     const el = document.getElementById('pick-count');
-    if (total === 0) {
-        el.textContent = 'Tap players to add them to your lineup picks';
-    } else {
-        el.textContent = `${total} player${total !== 1 ? 's' : ''} selected`;
-    }
-}
-
-// ===== SAVE / LOAD PICKS =====
-function savePicks() {
-    if (!currentGame) return;
-    const gamePk = currentGame.gameData.game.pk;
-    const data = {
-        away: [...picks.away],
-        home: [...picks.home],
-        timestamp: new Date().toISOString()
-    };
-    localStorage.setItem(`platoon_${gamePk}`, JSON.stringify(data));
-}
-
-function loadSavedPicks(gamePk) {
-    const saved = localStorage.getItem(`platoon_${gamePk}`);
-    if (saved) {
-        const data = JSON.parse(saved);
-        picks.away = new Set(data.away);
-        picks.home = new Set(data.home);
-    }
+    el.textContent = total === 0 ? 'Tap bench players you think will enter and hit a HR 💣' : `${total} bench bomb${total !== 1 ? 's' : ''} selected`;
 }
 
 function submitPicks() {
     if (picks.away.size + picks.home.size === 0) {
-        alert('Pick at least one player before locking in! 🏝️');
+        alert('Pick at least one bench bomber! 💣');
         return;
     }
     savePicks();
-    
     const btn = document.querySelector('.submit-btn');
-    btn.textContent = '✅ Picks Locked!';
+    btn.textContent = '✅ Bombs Locked!';
     btn.style.background = 'linear-gradient(135deg, #22c55e, #166534)';
-    
-    setTimeout(() => {
-        btn.textContent = '🏝️ Lock In My Picks';
-        btn.style.background = '';
-    }, 2000);
+    setTimeout(() => { btn.textContent = '💣 Lock In My Bombs'; btn.style.background = ''; }, 2000);
 }
 
-function checkResults(awayLineup, homeLineup) {
+function savePicks() {
     if (!currentGame) return;
     const gamePk = currentGame.gameData.game.pk;
-    loadSavedPicks(gamePk);
-    
-    if (picks.away.size + picks.home.size === 0) return;
-    
-    let correct = 0;
-    let total = picks.away.size + picks.home.size;
-    
-    picks.away.forEach(id => { if (awayLineup.includes(id)) correct++; });
-    picks.home.forEach(id => { if (homeLineup.includes(id)) correct++; });
-    
-    const pct = total > 0 ? Math.round((correct / total) * 100) : 0;
-    
-    const resultsEl = document.getElementById('results-area');
-    resultsEl.style.display = 'block';
-    resultsEl.innerHTML = `
-        <div class="results-card">
-            <div style="font-size:14px;color:var(--text-light);margin-bottom:8px;">Your Platoon Score</div>
-            <div class="results-score">${correct}/${total}</div>
-            <div class="results-label">${pct}% accuracy ${pct >= 80 ? '🏆' : pct >= 60 ? '🌊' : pct >= 40 ? '🥥' : '🦀'}</div>
-            <div style="margin-top:12px;font-size:13px;color:var(--text-light);">
-                ${pct >= 80 ? 'Lagoon Legend! You nailed the platoons.' :
-                  pct >= 60 ? 'Solid read on the matchups!' :
-                  pct >= 40 ? 'Not bad — the tides were tricky today.' :
-                  'Washed ashore. Better luck next game! 🏖️'}
-            </div>
-        </div>
-    `;
+    localStorage.setItem(`platoon_${gamePk}`, JSON.stringify({
+        away: [...picks.away], home: [...picks.home], timestamp: new Date().toISOString()
+    }));
 }
 
 // ===== VIEW MANAGEMENT =====
@@ -408,10 +436,7 @@ function showView(view) {
     document.getElementById(`${view}-view`).style.display = 'block';
 }
 
-function showGames() {
-    showView('games');
-    currentGame = null;
-}
+function showGames() { showView('games'); currentGame = null; }
 
 function showLoading(show) {
     document.getElementById('loading').style.display = show ? 'block' : 'none';
